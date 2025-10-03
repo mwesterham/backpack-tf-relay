@@ -9,24 +9,52 @@ const CLIENT_TO_SOURCE = (process.env.CLIENT_TO_SOURCE ?? "false") === "true";
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
 const PING_INTERVAL_MS = 30_000;
+const HEARTBEAT_TIMEOUT_MS = 45_000; // give a grace window beyond ping interval
 
 let source: WebSocket | null = null;
 let backoff = INITIAL_BACKOFF_MS;
 const clients = new Set<WebSocket>();
 
-/** connect to the source websocket with exponential backoff */
+let heartbeatTimer: NodeJS.Timeout | null = null;
+let lastPong = Date.now();
+
+/** connect to the source websocket with exponential backoff and heartbeat */
 function connectToSource() {
   console.info(`Connecting to source: ${SOURCE_URL}`);
-  source = new WebSocket(SOURCE_URL);
+  const ws = new WebSocket(SOURCE_URL);
+  source = ws;
 
-  source.on("open", () => {
+  ws.on("open", () => {
     console.info("Connected to source WebSocket.");
     backoff = INITIAL_BACKOFF_MS;
+    lastPong = Date.now();
+
+    // Start heartbeat check
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(() => {
+      if (!source || source.readyState !== WebSocket.OPEN) return;
+
+      const now = Date.now();
+      if (now - lastPong > HEARTBEAT_TIMEOUT_MS) {
+        console.warn("Source heartbeat timeout; forcing reconnect.");
+        source.terminate(); // immediate close
+        return;
+      }
+
+      try {
+        source.ping();
+      } catch (err) {
+        console.warn("Failed to ping source:", err);
+      }
+    }, PING_INTERVAL_MS);
   });
 
-  source.on("message", (data) => {
+  ws.on("pong", () => {
+    lastPong = Date.now();
+  });
+
+  ws.on("message", (data) => {
     const payload = typeof data === "string" ? data : data.toString();
-    // Broadcast to clients
     for (const c of clients) {
       if (c.readyState === WebSocket.OPEN) {
         try {
@@ -38,12 +66,16 @@ function connectToSource() {
     }
   });
 
-  source.on("error", (err) => {
+  ws.on("error", (err) => {
     console.error("Source WebSocket error:", err instanceof Error ? err.message : err);
   });
 
-  source.on("close", (code, reason) => {
+  ws.on("close", (code, reason) => {
     console.warn(`Source closed (code=${code}) reason=${reason.toString()}. Reconnecting in ${backoff}ms`);
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
     source = null;
     setTimeout(() => {
       backoff = Math.min(Math.round(backoff * 1.5), MAX_BACKOFF_MS);
@@ -61,7 +93,7 @@ function jitter(ms: number) {
 const server = http.createServer((req, res) => {
   if (req.url === "/healthz") {
     res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("ok");
+    res.end(source && source.readyState === WebSocket.OPEN ? "ok" : "degraded");
     return;
   }
   res.writeHead(404);
@@ -76,7 +108,6 @@ wss.on("connection", (ws, req) => {
 
   ws.on("message", (data) => {
     const msg = typeof data === "string" ? data : data.toString();
-    // Optionally forward client -> source (bidirectional)
     if (CLIENT_TO_SOURCE && source && source.readyState === WebSocket.OPEN) {
       try {
         source.send(msg);
@@ -96,8 +127,11 @@ wss.on("connection", (ws, req) => {
 const pingInterval = setInterval(() => {
   for (const ws of clients) {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.ping();
-      // optionally, you can track pongs and close if unresponsive
+      try {
+        ws.ping();
+      } catch (err) {
+        console.warn("Client ping failed:", err);
+      }
     } else {
       clients.delete(ws);
     }
@@ -108,6 +142,7 @@ const pingInterval = setInterval(() => {
 function shutdown() {
   console.info("Shutting down...");
   clearInterval(pingInterval);
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
   for (const ws of clients) {
     try { ws.close(1001, "server-shutdown"); } catch {}
   }
@@ -120,10 +155,10 @@ function shutdown() {
   });
   setTimeout(() => process.exit(0), 5000);
 }
+
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-/** start listening and connect to source */
 server.listen(RELAY_PORT, () => {
   console.info(`WebSocket relay listening on ws://0.0.0.0:${RELAY_PORT}${RELAY_PATH}`);
   connectToSource();
