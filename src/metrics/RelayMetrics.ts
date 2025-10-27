@@ -24,6 +24,16 @@ export class RelayMetrics {
     help: "Total number of messages failed to parse for SKU updates",
   });
 
+  public messagesForwardedBytes = new client.Counter({
+    name: "relay_messages_forwarded_bytes_total",
+    help: "Total bytes of messages forwarded to clients",
+  });
+
+  public skuUpdatesForwardedBytes = new client.Counter({
+    name: "relay_sku_updates_forwarded_bytes_total",
+    help: "Total bytes of SKU updates forwarded to clients",
+  });
+
   public getMetrics(): Promise<string> {
     return client.register.metrics();
   }

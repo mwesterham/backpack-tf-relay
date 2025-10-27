@@ -82,10 +82,14 @@ export class WebSocketRelay {
         const updates = JSON.parse(payload); // guaranteed to be a list
         if (Array.isArray(updates)) {
           this.metrics.skuUpdatesForwarded.inc(updates.length);
+
+          // Add bytes for SKU updates
+          const bytes = Buffer.byteLength(JSON.stringify(updates), "utf8");
+          this.metrics.skuUpdatesForwardedBytes.inc(bytes);
         }
       } catch (err) {
         this.logger.warn({ err, payload }, "Failed to parse message for SKU updates");
-        this.metrics.failedSkuParse.inc(); // increment parse failure metric
+        this.metrics.failedSkuParse.inc();
       }
 
       // Forward message to clients
@@ -94,19 +98,20 @@ export class WebSocketRelay {
           try {
             client.send(payload);
             this.metrics.messagesForwarded.inc();
+
+            // Add bytes for message
+            const bytes = Buffer.byteLength(payload, "utf8");
+            this.metrics.messagesForwardedBytes.inc(bytes);
           } catch (err) {
             this.logger.warn({ err }, "Failed to send to client");
-            this.metrics.connectedClients.set(this.clients.size);
+            this.metrics.failedClientSend.inc();
           }
+        } else {
+          this.clients.delete(client);
+          this.metrics.connectedClients.set(this.clients.size);
         }
       }
     });
-
-    this.source.addEventListener("error", (err) => {
-      this.logger.error({ err }, "Source WebSocket error");
-      this.metrics.sourceConnected.set(0);
-    });
-  }
 
   private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     if (req.url === "/healthz") {
