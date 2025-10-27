@@ -112,6 +112,7 @@ export class WebSocketRelay {
         }
       }
     });
+  }
 
   private async handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     if (req.url === "/healthz") {
