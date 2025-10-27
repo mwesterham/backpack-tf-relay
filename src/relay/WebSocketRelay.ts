@@ -76,6 +76,19 @@ export class WebSocketRelay {
 
     this.source.addEventListener("message", (event) => {
       const payload = typeof event.data === "string" ? event.data : event.data.toString();
+      
+      // Count SKU updates
+      try {
+        const updates = JSON.parse(payload); // guaranteed to be a list
+        if (Array.isArray(updates)) {
+          this.metrics.skuUpdatesForwarded.inc(updates.length);
+        }
+      } catch (err) {
+        this.logger.warn({ err, payload }, "Failed to parse message for SKU updates");
+        this.metrics.failedSkuParse.inc(); // increment parse failure metric
+      }
+
+      // Forward message to clients
       for (const client of this.clients) {
         if (client.readyState === WebSocket.OPEN) {
           try {
@@ -83,6 +96,7 @@ export class WebSocketRelay {
             this.metrics.messagesForwarded.inc();
           } catch (err) {
             this.logger.warn({ err }, "Failed to send to client");
+            this.metrics.connectedClients.set(this.clients.size);
           }
         }
       }

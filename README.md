@@ -3,7 +3,7 @@
 - Build image and run in shell
 
 ```
-npm run build && docker build -t backpack-tf-relay:local . && docker run -p 8080:8080 -e SOURCE_URL="ws://klein.local:30331/forwarded" backpack-tf-relay:local
+npm run build && docker build -t backpack-tf-relay:local . && docker run -p 8080:8080 -e SOURCE_URL="ws://laputa.local:30331/forwarded" backpack-tf-relay:local
 ```
 
 - In seperate terminal, connect to the port
